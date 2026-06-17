@@ -130,22 +130,25 @@ defmodule EMCP.Transport.StreamableHTTP do
     |> json_response(200, handle_message(conn, request, opts))
   end
 
-  defp dispatch(conn, request, session_id, opts) do
-    store = get_store(opts)
-
+  defp dispatch(conn, request, _session_id, opts) do
     if notification?(request) do
       send_resp(conn, 202, "")
     else
       response = handle_message(conn, request, opts)
+      stream_response(conn, response)
+    end
+  end
 
-      case store.get_pid(session_id) do
-        pid when is_pid(pid) ->
-          send(pid, {:sse_message, JSON.encode!(response)})
-          json_response(conn, 202, %{})
+  defp stream_response(conn, response) do
+    conn =
+      conn
+      |> put_resp_content_type("text/event-stream")
+      |> put_resp_header("cache-control", "no-cache")
+      |> send_chunked(200)
 
-        nil ->
-          json_response(conn, 200, response)
-      end
+    case chunk(conn, sse_encode(JSON.encode!(response), 0)) do
+      {:ok, conn} -> conn
+      {:error, _} -> conn
     end
   end
 

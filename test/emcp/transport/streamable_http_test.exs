@@ -31,6 +31,28 @@ defmodule EMCP.Transport.StreamableHTTPTest do
     {conn, session_id}
   end
 
+  # Request responses are streamed as SSE on the POST; everything else (errors,
+  # notifications, initialize, delete) stays application/json.
+  defp response_body(conn) do
+    case get_resp_header(conn, "content-type") do
+      [ct | _] ->
+        if String.contains?(ct, "text/event-stream"),
+          do: decode_sse_body(conn.resp_body),
+          else: JSON.decode!(conn.resp_body)
+
+      [] ->
+        JSON.decode!(conn.resp_body)
+    end
+  end
+
+  defp decode_sse_body(body) do
+    body
+    |> String.split("\n")
+    |> Enum.find(&String.starts_with?(&1, "data: "))
+    |> String.replace_prefix("data: ", "")
+    |> JSON.decode!()
+  end
+
   describe "POST initialize" do
     test "returns protocol version and session ID" do
       {conn, session_id} = init_session()
@@ -38,7 +60,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
       assert conn.status == 200
       assert session_id != nil
 
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["jsonrpc"] == "2.0"
       assert body["id"] == "init"
       assert body["result"]["protocolVersion"]
@@ -57,7 +79,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call()
 
       assert conn.status == 200
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["id"] == "1"
     end
 
@@ -67,7 +89,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call()
 
       assert conn.status == 400
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["error"] == "Missing session ID"
     end
 
@@ -77,7 +99,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call()
 
       assert conn.status == 200
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["result"] == %{}
     end
 
@@ -89,7 +111,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call()
 
       assert conn.status == 400
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["error"] == "Invalid JSON"
     end
 
@@ -122,7 +144,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call()
 
       assert conn.status == 200
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["id"] == "2"
       assert %{"content" => [%{"text" => "hello"}]} = body["result"]
     end
@@ -142,7 +164,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
       session_id = get_resp_header(conn, "mcp-session-id") |> List.first()
       assert session_id != nil
 
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["result"]["protocolVersion"]
     end
 
@@ -160,7 +182,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call()
 
       assert conn.status == 200
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["id"] == "1"
       assert body["result"] == %{}
     end
@@ -176,7 +198,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call()
 
       assert conn.status == 200
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["success"] == true
 
       # Session is re-created transparently
@@ -193,7 +215,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
       conn = conn(:delete, "/mcp") |> call()
 
       assert conn.status == 400
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["error"] == "Missing session ID"
     end
   end
@@ -216,7 +238,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call()
 
       assert conn.status == 200
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["result"] == %{}
     end
   end
@@ -230,7 +252,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call()
 
       assert conn.status == 406
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["error"] == "Accept header must include text/event-stream"
     end
 
@@ -241,7 +263,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call()
 
       assert conn.status == 400
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["error"] == "Missing session ID"
     end
 
@@ -323,7 +345,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call_strict()
 
       assert conn.status == 404
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["error"] == "Session not found"
     end
 
@@ -343,7 +365,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call_strict()
 
       assert conn.status == 404
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["error"] == "Session expired"
     end
 
@@ -357,7 +379,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call_strict()
 
       assert conn.status == 200
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["result"] == %{}
     end
   end
@@ -367,7 +389,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
       conn = conn(:put, "/mcp") |> call()
 
       assert conn.status == 405
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["error"] == "Method not allowed"
     end
   end
@@ -424,7 +446,7 @@ defmodule EMCP.Transport.StreamableHTTPTest do
         |> call_with_opts(validate_origin: true, allowed_origins: ["https://myapp.example.com"])
 
       assert conn.status == 403
-      body = JSON.decode!(conn.resp_body)
+      body = response_body(conn)
       assert body["error"]["message"] == "Forbidden origin"
     end
 

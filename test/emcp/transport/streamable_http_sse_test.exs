@@ -255,34 +255,36 @@ defmodule EMCP.Transport.StreamableHTTPSSETest do
       close_sse(socket)
     end
 
-    test "POST routes response through SSE stream when connected", %{port: port} do
+    test "POST returns the response as SSE on the POST, not the GET stream", %{port: port} do
       session_id = init_session(port)
       {socket, _headers} = open_sse(port, session_id)
       Process.sleep(100)
 
-      {status, _headers, _resp_body} =
+      {status, headers, resp_body} =
         post_request(port, session_id, %{jsonrpc: "2.0", method: "ping", id: "1"})
 
-      assert status == 202
+      assert status == 200
+      assert {"content-type", ct} = List.keyfind(headers, "content-type", 0)
+      assert ct =~ "text/event-stream"
 
-      data = receive_sse_event(socket)
-      assert data =~ "event: message"
-
-      response = decode_sse_data(data)
+      response = decode_sse_data(resp_body)
       assert response["id"] == "1"
       assert response["result"] == %{}
+
+      # The standalone GET stream carries no response for this request.
+      assert receive_sse_event(socket, 300) == ""
 
       close_sse(socket)
     end
 
-    test "POST returns inline JSON when no SSE connection", %{port: port} do
+    test "POST returns the response as SSE even without a GET stream", %{port: port} do
       session_id = init_session(port)
 
       {status, _headers, resp_body} =
         post_request(port, session_id, %{jsonrpc: "2.0", method: "ping", id: "1"})
 
       assert status == 200
-      response = JSON.decode!(resp_body)
+      response = decode_sse_data(resp_body)
       assert response["id"] == "1"
       assert response["result"] == %{}
     end
@@ -330,12 +332,12 @@ defmodule EMCP.Transport.StreamableHTTPSSETest do
       assert EMCP.SessionStore.ETS.lookup(session_id) != nil
     end
 
-    test "tools/call response is streamed via SSE", %{port: port} do
+    test "tools/call response is streamed via SSE on the POST", %{port: port} do
       session_id = init_session(port)
       {socket, _headers} = open_sse(port, session_id)
       Process.sleep(100)
 
-      {status, _headers, _resp_body} =
+      {status, _headers, resp_body} =
         post_request(port, session_id, %{
           jsonrpc: "2.0",
           method: "tools/call",
@@ -343,13 +345,13 @@ defmodule EMCP.Transport.StreamableHTTPSSETest do
           params: %{name: "echo", arguments: %{message: "hello via sse"}}
         })
 
-      assert status == 202
+      assert status == 200
 
-      data = receive_sse_event(socket)
-
-      response = decode_sse_data(data)
+      response = decode_sse_data(resp_body)
       assert response["id"] == "tool-1"
       assert %{"content" => [%{"text" => "hello via sse"}]} = response["result"]
+
+      assert receive_sse_event(socket, 300) == ""
 
       close_sse(socket)
     end
