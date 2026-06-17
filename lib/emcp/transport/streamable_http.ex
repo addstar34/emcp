@@ -130,22 +130,12 @@ defmodule EMCP.Transport.StreamableHTTP do
     |> json_response(200, handle_message(conn, request, opts))
   end
 
-  defp dispatch(conn, request, session_id, opts) do
-    store = get_store(opts)
-
+  defp dispatch(conn, request, _session_id, opts) do
     if notification?(request) do
       send_resp(conn, 202, "")
     else
       response = handle_message(conn, request, opts)
-
-      case store.get_pid(session_id) do
-        pid when is_pid(pid) ->
-          send(pid, {:sse_message, JSON.encode!(response)})
-          json_response(conn, 202, %{})
-
-        nil ->
-          json_response(conn, 200, response)
-      end
+      json_response(conn, 200, response)
     end
   end
 

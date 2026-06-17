@@ -255,38 +255,6 @@ defmodule EMCP.Transport.StreamableHTTPSSETest do
       close_sse(socket)
     end
 
-    test "POST routes response through SSE stream when connected", %{port: port} do
-      session_id = init_session(port)
-      {socket, _headers} = open_sse(port, session_id)
-      Process.sleep(100)
-
-      {status, _headers, _resp_body} =
-        post_request(port, session_id, %{jsonrpc: "2.0", method: "ping", id: "1"})
-
-      assert status == 202
-
-      data = receive_sse_event(socket)
-      assert data =~ "event: message"
-
-      response = decode_sse_data(data)
-      assert response["id"] == "1"
-      assert response["result"] == %{}
-
-      close_sse(socket)
-    end
-
-    test "POST returns inline JSON when no SSE connection", %{port: port} do
-      session_id = init_session(port)
-
-      {status, _headers, resp_body} =
-        post_request(port, session_id, %{jsonrpc: "2.0", method: "ping", id: "1"})
-
-      assert status == 200
-      response = JSON.decode!(resp_body)
-      assert response["id"] == "1"
-      assert response["result"] == %{}
-    end
-
     test "SSE receives keepalive pings", %{port: port} do
       session_id = init_session(port)
       {socket, _headers} = open_sse(port, session_id)
@@ -330,26 +298,61 @@ defmodule EMCP.Transport.StreamableHTTPSSETest do
       assert EMCP.SessionStore.ETS.lookup(session_id) != nil
     end
 
-    test "tools/call response is streamed via SSE", %{port: port} do
+  end
+
+  describe "POST response delivery" do
+    test "an open SSE stream does not divert the POST response", %{port: port} do
       session_id = init_session(port)
       {socket, _headers} = open_sse(port, session_id)
       Process.sleep(100)
 
-      {status, _headers, _resp_body} =
+      {status, _headers, resp_body} =
+        post_request(port, session_id, %{jsonrpc: "2.0", method: "ping", id: "1"})
+
+      # The response is returned on the POST, not pushed onto the standalone GET
+      # stream — so a dropped or stale GET stream can never swallow it.
+      assert status == 200
+      response = JSON.decode!(resp_body)
+      assert response["id"] == "1"
+      assert response["result"] == %{}
+
+      # Nothing arrives on the GET stream for this request.
+      assert receive_sse_event(socket, 300) == ""
+
+      close_sse(socket)
+    end
+
+    test "response is returned on the POST when no SSE stream is open", %{port: port} do
+      session_id = init_session(port)
+
+      {status, _headers, resp_body} =
+        post_request(port, session_id, %{jsonrpc: "2.0", method: "ping", id: "1"})
+
+      assert status == 200
+      response = JSON.decode!(resp_body)
+      assert response["id"] == "1"
+      assert response["result"] == %{}
+    end
+
+    test "tools/call response is returned on the POST", %{port: port} do
+      session_id = init_session(port)
+      {socket, _headers} = open_sse(port, session_id)
+      Process.sleep(100)
+
+      {status, _headers, resp_body} =
         post_request(port, session_id, %{
           jsonrpc: "2.0",
           method: "tools/call",
           id: "tool-1",
-          params: %{name: "echo", arguments: %{message: "hello via sse"}}
+          params: %{name: "echo", arguments: %{message: "hello via post"}}
         })
 
-      assert status == 202
-
-      data = receive_sse_event(socket)
-
-      response = decode_sse_data(data)
+      assert status == 200
+      response = JSON.decode!(resp_body)
       assert response["id"] == "tool-1"
-      assert %{"content" => [%{"text" => "hello via sse"}]} = response["result"]
+      assert %{"content" => [%{"text" => "hello via post"}]} = response["result"]
+
+      assert receive_sse_event(socket, 300) == ""
 
       close_sse(socket)
     end
