@@ -255,40 +255,6 @@ defmodule EMCP.Transport.StreamableHTTPSSETest do
       close_sse(socket)
     end
 
-    test "POST returns the response inline even when an SSE stream is connected",
-         %{port: port} do
-      session_id = init_session(port)
-      {socket, _headers} = open_sse(port, session_id)
-      Process.sleep(100)
-
-      {status, _headers, resp_body} =
-        post_request(port, session_id, %{jsonrpc: "2.0", method: "ping", id: "1"})
-
-      # The response must be returned on the POST, not pushed onto the standalone
-      # GET stream (the spec forbids sending a request's response there).
-      assert status == 200
-      response = JSON.decode!(resp_body)
-      assert response["id"] == "1"
-      assert response["result"] == %{}
-
-      # Nothing should arrive on the GET stream for this request.
-      assert receive_sse_event(socket, 300) == ""
-
-      close_sse(socket)
-    end
-
-    test "POST returns inline JSON when no SSE connection", %{port: port} do
-      session_id = init_session(port)
-
-      {status, _headers, resp_body} =
-        post_request(port, session_id, %{jsonrpc: "2.0", method: "ping", id: "1"})
-
-      assert status == 200
-      response = JSON.decode!(resp_body)
-      assert response["id"] == "1"
-      assert response["result"] == %{}
-    end
-
     test "SSE receives keepalive pings", %{port: port} do
       session_id = init_session(port)
       {socket, _headers} = open_sse(port, session_id)
@@ -332,8 +298,43 @@ defmodule EMCP.Transport.StreamableHTTPSSETest do
       assert EMCP.SessionStore.ETS.lookup(session_id) != nil
     end
 
-    test "tools/call response is returned inline even with an SSE stream open",
-         %{port: port} do
+  end
+
+  describe "POST response delivery" do
+    test "an open SSE stream does not divert the POST response", %{port: port} do
+      session_id = init_session(port)
+      {socket, _headers} = open_sse(port, session_id)
+      Process.sleep(100)
+
+      {status, _headers, resp_body} =
+        post_request(port, session_id, %{jsonrpc: "2.0", method: "ping", id: "1"})
+
+      # The response is returned on the POST, not pushed onto the standalone GET
+      # stream — so a dropped or stale GET stream can never swallow it.
+      assert status == 200
+      response = JSON.decode!(resp_body)
+      assert response["id"] == "1"
+      assert response["result"] == %{}
+
+      # Nothing arrives on the GET stream for this request.
+      assert receive_sse_event(socket, 300) == ""
+
+      close_sse(socket)
+    end
+
+    test "response is returned on the POST when no SSE stream is open", %{port: port} do
+      session_id = init_session(port)
+
+      {status, _headers, resp_body} =
+        post_request(port, session_id, %{jsonrpc: "2.0", method: "ping", id: "1"})
+
+      assert status == 200
+      response = JSON.decode!(resp_body)
+      assert response["id"] == "1"
+      assert response["result"] == %{}
+    end
+
+    test "tools/call response is returned on the POST", %{port: port} do
       session_id = init_session(port)
       {socket, _headers} = open_sse(port, session_id)
       Process.sleep(100)
